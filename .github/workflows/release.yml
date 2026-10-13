@@ -45,9 +45,41 @@ permissions:
   contents: write # to create the Release
 
 jobs:
+  # One zip serves both platforms, so it carries both native workers, and each
+  # is built where it runs. This one is handed to the job that packs.
+  windows-worker:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Install
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Build the native worker
+        run: npm run build:worker
+
+      # the worker that ships, against its own synthetic device
+      - name: Test
+        run: npm test
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-worker
+          path: driver/worker/bin/bb60-worker.exe
+          if-no-files-found: error
+
   release:
-    # Apple Silicon: the zip carries a native worker built here. It does not
-    # carry Signal Hound's library — the user installs that themselves.
+    # Apple Silicon: the zip carries a native worker built here, and the
+    # Windows one from the job above. It does not carry Signal Hound's
+    # library — the user installs that themselves.
+    needs: windows-worker
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -66,6 +98,12 @@ jobs:
       # tree dirty — and which the pack step carries into the zip.
       - name: Build the native worker
         run: npm run build:worker
+
+      - name: Fetch the Windows worker
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-worker
+          path: driver/worker/bin
 
       # A manual run that asked for a release: move the version and make the
       # release commit and tag here, locally. They are pushed only after every

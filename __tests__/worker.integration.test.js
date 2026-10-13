@@ -6,7 +6,7 @@
 // the host's grid — the one piece of signal handling this plugin does itself.
 //
 // It needs `npm run build:worker`, which only produces anything on Apple
-// Silicon. Anywhere else these tests are skipped, and say so.
+// Silicon and on Windows x64. Anywhere else these tests are skipped, and say so.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +25,7 @@ delete process.env.SB_BB60_WORKER;
 
 const skip = resolveWorker()
   ? false
-  : 'NOT RUN: no native worker here — run `npm run build:worker` (Apple Silicon only)';
+  : 'NOT RUN: no native worker here — run `npm run build:worker` (Apple Silicon or Windows x64)';
 
 const START_HZ = 470_000_000;
 const STOP_HZ = 616_000_000;
@@ -100,10 +100,13 @@ test('the average detector still shows a narrow carrier at full height', { skip 
 
 test('video bandwidth and capture time are clamped and steady the floor', { skip }, async (t) => {
   const worker = await openWorker(t);
+  // A megahertz of empty floor, so each point is about one device bin: over
+  // the whole band a point is the strongest of a hundred bins, which hides
+  // the very jitter this measures.
   const spread = async (fields) => {
     const applied = await worker.configure({
       startHz: START_HZ,
-      stopHz: STOP_HZ,
+      stopHz: START_HZ + 1_000_000,
       pointCount: 451,
       rbwHz: 10_000,
       ...fields,
@@ -153,12 +156,13 @@ test('a reconfigure while sweeping switches grid without stopping', { skip }, as
   assert.equal((await nextTrace(worker, second.gen)).amps.length, 33);
 });
 
-// Signal Hound's library is the user's to install. A Mac where it is missing
-// or broken must get a worker that starts, answers, and says what to do.
+// Signal Hound's library is the user's to install. A computer where it is
+// missing or broken must get a worker that starts, answers, and says what to do.
 test('a library that will not load is reported as setup, not as a crash', { skip }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'bb60-lib-'));
-  const notALibrary = join(dir, 'libbb_api.5.0.11.dylib');
-  writeFileSync(notALibrary, 'not a Mach-O file');
+  const windows = process.platform === 'win32';
+  const notALibrary = join(dir, windows ? 'bb_api.dll' : 'libbb_api.5.0.11.dylib');
+  writeFileSync(notALibrary, 'not a library at all');
   delete process.env.SB_BB60_MOCK; // the real worker, really loading
   t.after(() => (process.env.SB_BB60_MOCK = 'native'));
   const pluginConfig = { libraryPath: dir };
@@ -172,7 +176,10 @@ test('a library that will not load is reported as setup, not as a crash', { skip
   await assert.rejects(worker.open(), (err) => {
     assert.equal(err.setup, true);
     assert.match(err.message, /could not be loaded/);
-    assert.match(err.message, /install-signal-hound-library\.sh/);
+    assert.match(
+      err.message,
+      windows ? /Install Spike/ : /install-signal-hound-library\.sh/
+    );
     return true;
   });
   assert.equal(worker.dead, false, 'the worker is still there to be told to quit');

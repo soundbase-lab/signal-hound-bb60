@@ -12,14 +12,19 @@
 // Signal Hound's library is not part of this plugin and is not linked here.
 // The user installs it from Signal Hound (see README), the driver finds it,
 // and it is loaded at run time from the path given by --lib. So this file
-// builds with no vendor SDK present, and a Mac without the library gets a
-// worker that starts and says exactly what is missing.
+// builds with no vendor SDK present, and a computer without the library gets
+// a worker that starts and says exactly what is missing.
 //
-// Two things about the macOS build of the vendor library shape this file:
+// It builds for macOS (clang) and for Windows (MSVC); the few places the two
+// differ — loading the library, reading stdin without blocking — are behind
+// #ifdef _WIN32 and nowhere else.
 //
-//   - bbCloseDevice() traps (brk #1) after a successful open, in 5.0.11. It is
-//     never called: a device is released by bbAbort() and process exit, which
-//     is why "close" in this plugin means "the worker goes away".
+// Two things about the vendor library shape this file:
+//
+//   - bbCloseDevice() traps (brk #1) after a successful open, in the macOS
+//     build of 5.0.11. It is never called, on either platform: a device is
+//     released by bbAbort() and process exit, which is why "close" in this
+//     plugin means "the worker goes away".
 //   - The device chooses its own bin spacing from the RBW (tens of thousands
 //     of bins for a UHF sweep). The host asks for a few hundred points, so
 //     every sweep is reduced here, onto the grid the host asked for, before it
@@ -32,11 +37,20 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#else
 #include <dlfcn.h>
 #include <poll.h>
 #include <unistd.h>
+#endif
 
 using Clock = std::chrono::steady_clock;
 
@@ -98,14 +112,54 @@ BB_FUNCTIONS(X)
 // Empty when the library is loaded; otherwise why it is not.
 std::string libraryError = "no library path was given (--lib)";
 
+#ifdef _WIN32
+std::wstring widen(const std::string &utf8) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+    std::wstring out(n > 0 ? n - 1 : 0, L'\0');
+    if (n > 1) MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &out[0], n);
+    return out;
+}
+
+std::string narrow(const wchar_t *wide) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+    std::string out(n > 0 ? n - 1 : 0, '\0');
+    if (n > 1) WideCharToMultiByte(CP_UTF8, 0, wide, -1, &out[0], n, nullptr, nullptr);
+    return out;
+}
+
+std::string lastErrorText() {
+    const DWORD code = GetLastError();
+    wchar_t text[512] = L"";
+    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   nullptr, code, 0, text, 512, nullptr);
+    std::string out = narrow(text);
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
+        out.pop_back();
+    return "error " + std::to_string(code) + (out.empty() ? "" : ": " + out);
+}
+
+// The library's own dependencies (FTD2XX.dll) sit beside it, not beside us:
+// the altered search path is what finds them there.
+void *openLibrary(const char *path) {
+    return LoadLibraryExW(widen(path).c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+}
+void *findSymbol(void *lib, const char *name) {
+    return (void *)GetProcAddress((HMODULE)lib, name);
+}
+#else
+std::string lastErrorText() { return dlerror(); }
+void *openLibrary(const char *path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
+void *findSymbol(void *lib, const char *name) { return dlsym(lib, name); }
+#endif
+
 void loadLibrary(const char *path) {
-    void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    void *lib = openLibrary(path);
     if (!lib) {
-        libraryError = dlerror();
+        libraryError = lastErrorText();
         return;
     }
 #define X(ret, name, args)                                                     \
-    name = (ret (*) args) dlsym(lib, #name);                                   \
+    name = (ret (*) args) findSymbol(lib, #name);                              \
     if (!name) {                                                               \
         libraryError = std::string(path) + " has no " #name;                   \
         return;                                                                \
@@ -166,6 +220,7 @@ std::string quoted(const char *s) {
     for (; s && *s; ++s) {
         if (*s == '"' || *s == '\\') out += '\\';
         if (*s == '\n') { out += "\\n"; continue; }
+        if (*s == '\r') continue;
         out += *s;
     }
     return out + "\"";
@@ -309,7 +364,8 @@ void mockFetch() {
         }
         traceMax[i] = (float)amp;
     }
-    usleep((useconds_t)(15000 + fmin(config.captureMs, 100.0) * 1000));
+    std::this_thread::sleep_for(std::chrono::microseconds(
+        (long long)(15000 + fmin(config.captureMs, 100.0) * 1000)));
 }
 
 // Returns a bbStatus: negative is an error, positive a warning.
@@ -549,9 +605,55 @@ void sweepOnce() {
     }
 }
 
+// -- stdin ----------------------------------------------------------------------
+
+// Up to `size` bytes of request: 0 when `block` is false and nothing is
+// waiting, negative when the driver has gone away.
+#ifdef _WIN32
+long readInput(char *buf, size_t size, bool block) {
+    const HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    if (!block) {
+        DWORD waiting = 0;
+        if (GetFileType(in) == FILE_TYPE_PIPE) {
+            if (!PeekNamedPipe(in, nullptr, 0, nullptr, &waiting, nullptr)) return -1;
+        } else if (WaitForSingleObject(in, 0) == WAIT_OBJECT_0) {
+            waiting = 1;  // a console or a file, when run by hand
+        }
+        if (!waiting) return 0;
+    }
+    DWORD n = 0;
+    if (!ReadFile(in, buf, (DWORD)size, &n, nullptr) || n == 0) return -1;
+    return (long)n;
+}
+#else
+long readInput(char *buf, size_t size, bool block) {
+    struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
+    if (poll(&pfd, 1, block ? -1 : 0) <= 0) return 0;
+    const ssize_t n = read(STDIN_FILENO, buf, size);
+    return n <= 0 ? -1 : (long)n;
+}
+#endif
+
 }  // namespace
 
+#ifdef _WIN32
+int run(int argc, char **argv);
+
+// The arguments as UTF-8, whatever the code page: --lib is a path in the
+// user's own folders.
+int wmain(int argc, wchar_t **wargv) {
+    _setmode(_fileno(stdout), _O_BINARY);  // "\n" stays one byte
+    std::vector<std::string> args;
+    for (int i = 0; i < argc; ++i) args.push_back(narrow(wargv[i]));
+    std::vector<char *> argv;
+    for (auto &a : args) argv.push_back(&a[0]);
+    return run(argc, argv.data());
+}
+
+int run(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     bool listOnly = false;
     const char *libraryPath = nullptr;
     for (int i = 1; i < argc; ++i) {
@@ -571,11 +673,9 @@ int main(int argc, char **argv) {
     char chunk[4096];
     for (;;) {
         // block for a request when idle; between sweeps, only look
-        struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
-        const int ready = poll(&pfd, 1, sweeping ? 0 : -1);
-        if (ready > 0) {
-            const ssize_t n = read(STDIN_FILENO, chunk, sizeof chunk);
-            if (n <= 0) leave();  // the driver went away: so do we
+        const long n = readInput(chunk, sizeof chunk, !sweeping);
+        if (n < 0) leave();  // the driver went away: so do we
+        if (n > 0) {
             pending.append(chunk, (size_t)n);
             size_t eol;
             while ((eol = pending.find('\n')) != std::string::npos) {

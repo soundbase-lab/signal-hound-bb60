@@ -29,10 +29,10 @@ jobs:
         # path handling, process termination and line endings differ, and those
         # are exactly the bugs that reach users first.
         #
-        # macOS is the only platform this plugin runs on: there the native
-        # worker is built and tested against its synthetic device. Ubuntu runs
-        # everything else against the JavaScript fake worker.
-        os: [macos-latest, ubuntu-latest]
+        # macOS and Windows are the platforms this plugin runs on: there the
+        # native worker is built and tested against its synthetic device.
+        # Ubuntu runs everything else against the JavaScript fake worker.
+        os: [macos-latest, windows-latest, ubuntu-latest]
         node: [22, 24]
 
     steps:
@@ -53,7 +53,7 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-      # A no-op anywhere but Apple Silicon. It needs only a compiler: Signal
+      # A no-op on Ubuntu. It needs only a compiler: Signal
       # Hound's library is installed by the user and loaded at run time, so the
       # worker is tested here against its own synthetic device.
       - name: Build the native worker

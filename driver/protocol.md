@@ -29,8 +29,8 @@ long the device samples per sweep) to 1–1000. `detector` is `average` or
 `bb60-worker --list` prints the `list` reply's fields as one line and exits,
 without opening anything. It is safe while another worker is sweeping.
 
-The native worker takes `--lib <path>`: Signal Hound's library, which it loads
-at run time. When that fails, `list` answers `devices: []` with a
+The native worker takes `--lib <path>`: Signal Hound's library
+(`libbb_api.*.dylib`, or `bb_api.dll` on Windows), which it loads at run time. When that fails, `list` answers `devices: []` with a
 `libraryError`, and `open` answers `ok: false` with `error: "library"` and the
 same `libraryError` — the loader's own words, which the driver turns into
 setup instructions. `--mock` needs no library.
@@ -47,5 +47,7 @@ setup instructions. `--mock` needs no library.
 ## Closing
 
 There is no `close`. The macOS build of the vendor library crashes in
-`bbCloseDevice`, so a device is released by the worker exiting: `quit`, stdin
-closing, or SIGKILL from the driver when a request does not answer.
+`bbCloseDevice`, so on both platforms a device is released by the worker
+exiting: `quit`, stdin closing, or SIGKILL from the driver when a request does
+not answer. On Windows, measured on a BB60C, each of the three leaves the
+device free for the next open.

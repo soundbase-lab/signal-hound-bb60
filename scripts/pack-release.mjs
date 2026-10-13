@@ -179,21 +179,34 @@ for (const f of shipped) {
 }
 log(`${shipped.length} tracked files: ${shipped.join(', ')}`);
 
-// The one exception to "git decides what ships": the native worker. It is
-// built from tracked source (`npm run build:worker`) and does not belong in
-// git as a binary, and a release without it installs cleanly and then finds
-// no analyzer. It is ours alone: Signal Hound's library is not in this folder
-// and must never be — the user installs it (install-signal-hound-library.sh).
+// The one exception to "git decides what ships": the native workers. They are
+// built from tracked source (`npm run build:worker`) and do not belong in git
+// as binaries, and a release without one installs cleanly and then finds no
+// analyzer. One zip serves every platform the manifest declares, so it needs
+// a worker for each — and each is built on its own platform: release.yml
+// builds the Windows one on a Windows runner and hands it to the Mac that
+// packs. They are ours alone: Signal Hound's library is not in this folder
+// and must never be — the user installs it (see README, "Setup").
+const WORKERS = {
+  'darwin-arm64': 'bb60-worker',
+  'win32-x64': 'bb60-worker.exe',
+};
 const BUILT = [join('driver', 'worker', 'bin')];
 for (const dir of BUILT) {
-  if (!existsSync(join(ROOT, dir, 'bb60-worker'))) {
+  const missing = (manifest.platforms ?? Object.keys(WORKERS)).filter(
+    (p) => !WORKERS[p] || !existsSync(join(ROOT, dir, WORKERS[p]))
+  );
+  for (const platform of missing) {
     refuse(
-      `${dir} has not been built — run \`npm run build:worker\` on an Apple ` +
-        'Silicon Mac first; without it the plugin opens no analyzer'
+      `${dir} has no worker for ${platform} — run \`npm run build:worker\` ` +
+        'on that platform and put the result there; without it the plugin ' +
+        'opens no analyzer on it'
     );
-    continue;
   }
-  const vendor = readdirSync(join(ROOT, dir)).find((f) => /libbb_api/.test(f));
+  if (!existsSync(join(ROOT, dir))) continue;
+  const vendor = readdirSync(join(ROOT, dir)).find((f) =>
+    /bb_api|ftd2xx/i.test(f)
+  );
   if (vendor) {
     fail(
       `${dir}/${vendor} is Signal Hound's library, which this plugin does not ` +
