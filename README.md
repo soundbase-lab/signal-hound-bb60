@@ -1,25 +1,47 @@
 # Signal Hound BB60 for SoundBase
 
 A SoundBase plugin that makes a Signal Hound BB60 spectrum analyzer a live scan
-source on a Mac. Its sweeps become the live trace on the plot, and the levels
+source on a Mac or a Windows PC. Its sweeps become the live trace on the plot, and the levels
 it measures decide which frequencies SoundBase is willing to coordinate.
 
 ## What you need
 
-- **An Apple Silicon Mac.** Signal Hound ships its BB60 library for macOS on
-  Apple Silicon only, so this plugin does not run on Intel Macs or Windows.
-- **A BB60C on a USB 3 port.** It needs no driver and no administrator rights.
-- **Two things installed once per Mac**, below. Until they are, the plugin
-  runs but finds no analyzer.
+- **An Apple Silicon Mac, or a 64-bit Windows PC.** Signal Hound ships its
+  BB60 library for macOS on Apple Silicon only, so this plugin does not run on
+  Intel Macs.
+- **A BB60C on a USB 3 port.** On a Mac it needs no driver and no
+  administrator rights; on Windows it needs Signal Hound's USB driver, which
+  Spike installs.
+- **Signal Hound's library, installed once per computer**, below. Until it is,
+  the plugin runs but finds no analyzer.
 
 ## Setup
 
 The plugin drives the analyzer through Signal Hound's own BB60 library. That
 library is Signal Hound's software, under Signal Hound's licence, so it is not
-included with the plugin: you install it from Signal Hound. It in turn needs
-libusb.
+included with the plugin: you install it from Signal Hound.
 
-### The quick way
+### Windows
+
+Install [Spike](https://signalhound.com/spike/), Signal Hound's own analyzer
+software. That is the whole setup: Spike brings the USB driver and the
+library, and the plugin finds the library in Spike's folder
+(`C:\Program Files\Signal Hound\Spike\bb_api.dll`). Close Spike before
+sweeping from SoundBase — only one program can use a BB60 at a time.
+
+Without Spike, the analyzer still needs Signal Hound's USB driver, and the
+plugin needs `bb_api.dll` with the `FTD2XX.dll` that comes beside it — both
+are in the Signal Hound SDK. Put the two DLLs in
+`%LOCALAPPDATA%\signal-hound-bb60\` (create the folder), or anywhere else and
+put the path in the plugin's **Signal Hound library** setting in SoundBase.
+This route has not been tested; the Spike one has.
+
+The plugin was tested on Windows 11 with the library Spike 4.0.16 installs
+(BB60 API 5.0.9).
+
+### macOS: the quick way
+
+On a Mac the library needs libusb as well.
 
 In Terminal, run the script in the plugin folder:
 
@@ -38,7 +60,7 @@ pass it and nothing is downloaded:
 ./install-signal-hound-library.sh ~/Downloads/signal_hound_sdk_09_14_26.zip
 ```
 
-### By hand
+### macOS: by hand
 
 1. Install libusb:
 
@@ -61,13 +83,15 @@ pass it and nothing is downloaded:
 If the library has to live somewhere else, put its path in the plugin's
 **Signal Hound library** setting in SoundBase.
 
-The plugin was tested with BB60 API 5.0.11, from the SDK dated 14 September
-2026. It needs 5.0.11 or later: earlier versions have no macOS build.
+On macOS the plugin was tested with BB60 API 5.0.11, from the SDK dated 14
+September 2026. It needs 5.0.11 or later: earlier versions have no macOS
+build.
 
 ### If no analyzer appears
 
-The plugin log in SoundBase says which of the two is missing. Running the
-script again also checks: it ends by reporting the analyzer it found.
+The plugin log in SoundBase says what is missing. On a Mac, running the script
+again also checks: it ends by reporting the analyzer it found. On Windows,
+check that Spike itself can see the analyzer, then close it.
 
 ## What it does, and does not
 
@@ -75,7 +99,7 @@ script again also checks: it ends by reporting the analyzer it found.
 |---|---|
 | Models | **BB60C**, tested on firmware 7. A BB60A or BB60D is not offered: neither has been run against this plugin. |
 | Range | 9 kHz – 6 GHz |
-| RBW | 1 kHz – 10 MHz. 1 kHz is the narrowest the Apple Silicon library sweeps. An RBW too narrow for the span is widened, and SoundBase shows what was used. |
+| RBW | 1 kHz – 10 MHz. 1 kHz is the narrowest the Apple Silicon library sweeps, and Windows is held to the same. An RBW the analyzer refuses at that span is widened, and SoundBase shows what was used. |
 | Automatic RBW | 10 kHz |
 | VBW | 1 kHz up to the RBW; automatic is a tenth of the RBW. 1 kHz is the narrowest the Apple Silicon library applies. |
 | Dwell | How long the analyzer samples per sweep: Fast, Coordination (default) or High quality. See below. |
@@ -121,22 +145,27 @@ holding the analyzer, before sweeping from SoundBase.
 
 ```sh
 npm install
-npm run build:worker   # compiles the worker; needs only Xcode's command line tools
+npm run build:worker   # compiles the worker; needs only a C++ compiler (below)
 npm run doctor
 npm test
 npm run smoke          # boots as SoundBase does; sweeps a BB60 if one is attached
 ```
 
-To sweep a real analyzer, do the [setup](#setup) above as a user would.
+The compiler is Xcode's command line tools on a Mac, and Visual Studio's
+"Desktop development with C++" on Windows (the free Build Tools are enough;
+the script finds them). To sweep a real analyzer, do the [setup](#setup) above
+as a user would.
 
 No analyzer is needed for any of it. `npm test` runs the adapter under the real
 plugin shell against a fake worker, on any platform, and the native worker
-against its own synthetic device on Apple Silicon. To poke at a running plugin
+against its own synthetic device on Apple Silicon and on Windows. To poke at a running plugin
 with nothing attached:
 
 ```sh
 SB_BB60_MOCK=1 npm start
 ```
+
+(In PowerShell: `$env:SB_BB60_MOCK = 1; npm start`.)
 
 ### How it is put together
 
@@ -147,9 +176,9 @@ driver/
   protocol.md               the JSON-lines protocol between them
   fake-worker.mjs           the same protocol with a synthetic spectrum, for tests
   worker/bb60_worker.cpp    the only code that calls Signal Hound's library
-  worker/bin/               built: the worker (not in git)
-scripts/build-worker.mjs    builds worker/bin/
-install-signal-hound-library.sh   the user's one-time setup; ships in the release
+  worker/bin/               built: bb60-worker and bb60-worker.exe (not in git)
+scripts/build-worker.mjs    builds this platform's worker into worker/bin/
+install-signal-hound-library.sh   the one-time setup on a Mac; ships in the release
 ```
 
 The worker does not link Signal Hound's library; it loads the user's installed
@@ -163,9 +192,12 @@ explains the pattern; `CLAUDE.md` lists what is specific to the BB60.
 
 ## Releasing
 
-`.github/workflows/release.yml` builds the worker on an Apple Silicon runner
-and packs it into the release zip; `docs/publishing.md` covers the rest. By
-hand, `npm run build:worker && npm run pack:release` produces the same zip.
+One zip serves both platforms, so it carries both workers.
+`.github/workflows/release.yml` builds each on its own runner, Windows and
+Apple Silicon, and packs them into the release zip; `docs/publishing.md`
+covers the rest. By hand, run `npm run build:worker` on each platform, put
+both results in `driver/worker/bin/` on the Mac, and `npm run pack:release`
+there produces the same zip.
 
 The zip contains no Signal Hound software, and the pack step refuses to build
 one that does.

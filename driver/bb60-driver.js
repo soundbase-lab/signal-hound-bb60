@@ -14,41 +14,67 @@ import {
   statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NATIVE_WORKER = fileURLToPath(
-  new URL('./worker/bin/bb60-worker', import.meta.url)
+  new URL(
+    `./worker/bin/bb60-worker${process.platform === 'win32' ? '.exe' : ''}`,
+    import.meta.url
+  )
 );
 const FAKE_WORKER = fileURLToPath(new URL('./fake-worker.mjs', import.meta.url));
 const INSTALL_SCRIPT = fileURLToPath(
   new URL('../install-signal-hound-library.sh', import.meta.url)
 );
 
-/** Where install-signal-hound-library.sh puts Signal Hound's library. */
-export const LIBRARY_DIR = join(
-  homedir(),
-  'Library',
-  'Application Support',
-  'signal-hound-bb60'
-);
-// then the places someone following Signal Hound's own instructions would use
-const LIBRARY_DIRS = [LIBRARY_DIR, '/usr/local/lib', '/opt/homebrew/lib'];
-const isLibrary = (name) => /^libbb_api.*\.dylib$/.test(name);
+const WINDOWS = process.platform === 'win32';
 
 /**
- * Signal Hound's BB60 API library on this Mac, or null. It is theirs to
+ * This plugin's own folder for Signal Hound's library: where
+ * install-signal-hound-library.sh puts it on a Mac, and where someone without
+ * Spike can drop bb_api.dll (and the FTD2XX.dll beside it) on Windows.
+ */
+export const LIBRARY_DIR = WINDOWS
+  ? join(
+      process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'),
+      'signal-hound-bb60'
+    )
+  : join(homedir(), 'Library', 'Application Support', 'signal-hound-bb60');
+// then where Signal Hound's own software or instructions leave it: on Windows
+// that is Spike, which nearly every BB60 owner has installed already
+const LIBRARY_DIRS = WINDOWS
+  ? [
+      LIBRARY_DIR,
+      join(
+        process.env.ProgramFiles ?? 'C:\\Program Files',
+        'Signal Hound',
+        'Spike'
+      ),
+    ]
+  : [LIBRARY_DIR, '/usr/local/lib', '/opt/homebrew/lib'];
+const isLibrary = (name) =>
+  WINDOWS ? /^bb_api\.dll$/i.test(name) : /^libbb_api.*\.dylib$/.test(name);
+
+/**
+ * Signal Hound's BB60 API library on this computer, or null. It is theirs to
  * distribute, so the user installs it and the plugin only goes looking:
  *
  *   1. the "Signal Hound library" plugin setting (a file, or a folder holding it)
  *   2. SB_BB60_LIBRARY
- *   3. where the install script puts it, then /usr/local/lib, /opt/homebrew/lib
+ *   3. macOS: where the install script puts it, then /usr/local/lib,
+ *      /opt/homebrew/lib. Windows: %LOCALAPPDATA%\signal-hound-bb60, then
+ *      Spike's folder in Program Files.
  */
 export function findLibrary(pluginConfig = {}, env = process.env) {
   const explicit = [pluginConfig.libraryPath, env.SB_BB60_LIBRARY]
     .map((p) => (typeof p === 'string' ? p.trim() : ''))
     .filter(Boolean)
-    .map((p) => p.replace(/^~(?=\/)/, homedir()));
+    // a path pasted from Explorer's "Copy as path" arrives in quotes
+    .map((p) => p.replace(/^"(.*)"$/, '$1'))
+    .map((p) => p.replace(/^~(?=[\\/])/, homedir()))
+    // absolute, because the worker's loader resolves it from somewhere else
+    .map((p) => resolve(p));
   for (const candidate of [...explicit, ...LIBRARY_DIRS]) {
     try {
       if (!statSync(candidate).isDirectory()) return candidate;
@@ -62,16 +88,21 @@ export function findLibrary(pluginConfig = {}, env = process.env) {
   return null;
 }
 
-const SETUP_HINT = `Run "${INSTALL_SCRIPT}" in Terminal, or see the plugin's README, then try again.`;
-const NO_LIBRARY = `Signal Hound's BB60 library is not installed on this Mac. ${SETUP_HINT}`;
+const SETUP_HINT = WINDOWS
+  ? 'Install Spike from signalhound.com (it includes the library and the USB driver), or see the plugin\'s README, then try again.'
+  : `Run "${INSTALL_SCRIPT}" in Terminal, or see the plugin's README, then try again.`;
+const NO_LIBRARY = `Signal Hound's BB60 library is not installed on this computer. ${SETUP_HINT}`;
 
-/** A dlopen failure, as something an RF coordinator can act on. */
+/** A failure to load the library, as something an RF coordinator can act on. */
 function describeLibraryError(detail) {
-  if (/libusb/.test(detail)) {
+  if (!WINDOWS && /libusb/.test(detail)) {
     return 'Signal Hound\'s BB60 library needs libusb, which is not installed. Run "brew install libusb" in Terminal, then try again.';
   }
   return `Signal Hound's BB60 library could not be loaded (${detail.split('\n')[0].slice(0, 200)}). ${SETUP_HINT}`;
 }
+
+// where Signal Hound's library exists and this plugin has a worker for it
+const SUPPORTED = ['darwin-arm64', 'win32-x64'];
 
 const LIST_TIMEOUT_MS = 3_000;
 const OPEN_TIMEOUT_MS = 15_000; // a cold open loads firmware and calibrates
@@ -118,6 +149,7 @@ export function resolveWorker(env = process.env) {
 // be started. Put the bit back where the install lets us; where it does not,
 // the spawn fails and says why.
 function ensureExecutable(path) {
+  if (WINDOWS) return; // no such bit
   try {
     accessSync(path, constants.X_OK);
   } catch {
@@ -220,9 +252,9 @@ export class Bb60Worker {
     const worker = resolveWorker();
     if (!worker) {
       throw new Error(
-        process.platform === 'darwin' && process.arch === 'arm64'
+        SUPPORTED.includes(`${process.platform}-${process.arch}`)
           ? 'The BB60 worker has not been built. Run "npm run build:worker" in the plugin folder.'
-          : 'Signal Hound provides the BB60 library for macOS on Apple Silicon only; this plugin cannot open a BB60 on this computer.'
+          : 'This plugin drives a BB60 on macOS (Apple Silicon) and Windows (64-bit) only; it cannot open one on this computer.'
       );
     }
     this.mock = worker.mock;

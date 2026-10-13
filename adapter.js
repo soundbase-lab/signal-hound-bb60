@@ -24,7 +24,8 @@ const MAX_FREQUENCY_HZ = 6_000_000_000;
 // 200 kHz is the smallest span Signal Hound suggests sweeping
 const MIN_SPAN_HZ = 200_000;
 // 1 kHz is the floor on Apple Silicon: the ARM build of the vendor library
-// refuses anything narrower in sweep mode
+// refuses anything narrower in sweep mode. Windows keeps the same floor, so a
+// project behaves alike on both
 const RBW_HZ = [
   1_000, 3_000, 10_000, 30_000, 100_000, 300_000, 1_000_000, 3_000_000,
   10_000_000,

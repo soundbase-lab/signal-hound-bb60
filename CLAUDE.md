@@ -36,13 +36,17 @@ scripts/                doctor, smoke, manifest, rename, bump-version, build-wor
 (`driver/worker/bb60_worker.cpp`) linking Signal Hound's `libbb_api`, driven by
 `driver/bb60-driver.js` over JSON lines — `driver/protocol.md` is the wire.
 `npm run build:worker` compiles it into `driver/worker/bin/`, which is
-gitignored.
+gitignored — `bb60-worker` with clang on Apple Silicon, `bb60-worker.exe` with
+MSVC on Windows x64. One source file serves both; what differs (loading the
+library, reading stdin without blocking) is behind `#ifdef _WIN32`. A release
+zip carries both workers.
 
 **Signal Hound's library is never part of this repository or a release.** That
 is a licensing decision, not a convenience: the user installs it from Signal
-Hound (`install-signal-hound-library.sh`, or by hand per the README), the
-driver finds it (`findLibrary`), and the worker `dlopen`s it from `--lib`. So
-do not vendor `bb_api.h` or the dylib, do not link against it, and do not add
+Hound (`install-signal-hound-library.sh` or by hand on a Mac; by installing
+Spike on Windows, where the driver looks in Spike's folder), the driver finds
+it (`findLibrary`), and the worker `dlopen`s or `LoadLibrary`s it from `--lib`. So
+do not vendor `bb_api.h`, the dylib or the DLL, do not link against it, and do not add
 a build step that downloads it. The few API names and constants the worker
 uses are restated at the top of `bb60_worker.cpp`.
 
@@ -50,16 +54,27 @@ Facts established against a real BB60C that are not obvious from the code:
 
 - **Never call `bbCloseDevice`.** It traps in the macOS build (5.0.11) after a
   successful open. A device is released by `bbAbort` and the worker exiting.
-- **Apple Silicon only, sweeps and I/Q only, RBW no narrower than 1 kHz.**
-  Those are the vendor library's limits on macOS, not choices made here.
-- **The library links Homebrew's libusb by absolute path.** Without libusb
-  the library fails to load; the driver turns that into a message naming
-  `brew install libusb`.
-- **A Mac without the library finds no devices, silently, in the UI.** The
+  Windows does the same for uniformity, and there (API 5.0.9) a `quit`, a
+  closed stdin and a kill each leave the device free to reopen.
+- **On macOS: Apple Silicon only, sweeps and I/Q only, RBW no narrower than
+  1 kHz.** Those are the vendor library's limits there, not choices made
+  here. The Windows library is not so limited, but the plugin offers the same
+  ranges on both so that a project behaves alike.
+- **On macOS the library links Homebrew's libusb by absolute path.** Without
+  libusb the library fails to load; the driver turns that into a message
+  naming `brew install libusb`.
+- **On Windows the library needs `FTD2XX.dll` beside it**, which is why the
+  worker loads it with `LOAD_WITH_ALTERED_SEARCH_PATH`, and why Spike's folder
+  — which has both — is where the driver looks. The device also needs Signal
+  Hound's USB driver, which Spike installs.
+- **Windows sweeps an RBW that macOS would widen.** 1 kHz across 9 kHz–6.4 GHz
+  is accepted: 42 million device bins, 2.6 s a sweep, a few hundred MB in the
+  worker.
+- **A computer without the library finds no devices, silently, in the UI.** The
   reason goes to the plugin log once, and to the device's status if one is
   added by hand. Reporting it as the plugin's `needs-setup` status would be
   better and needs a lifecycle hook in `main.js`.
-- **No root is needed**, whatever the vendor README says.
+- **No root is needed** on macOS, whatever the vendor README says.
 - **The device picks its own bin count from the RBW** — tens of thousands of
   bins. The worker reduces every sweep to the host's `pointCount`, keeping the
   strongest bin per point, before it crosses the pipe. That reduction is the one piece
@@ -82,7 +97,7 @@ Facts established against a real BB60C that are not obvious from the code:
 
 Tests run against `driver/fake-worker.mjs` (`SB_BB60_MOCK=1`) on any platform,
 and against the native worker's synthetic device (`SB_BB60_MOCK=native`) where
-it has been built. A change to the worker protocol changes all three: the C++
+it has been built — macOS and Windows both. A change to the worker protocol changes all three: the C++
 worker, the fake, and `driver/protocol.md`.
 
 ## Invariants — do not violate these without being asked
@@ -158,7 +173,7 @@ they are authoritative in a way that any summary — including this file — is 
 In order of what they prove:
 
 ```sh
-npm run build:worker  # only after changing driver/worker/ — Apple Silicon
+npm run build:worker  # only after changing driver/worker/ — Apple Silicon or Windows x64
 npm run doctor    # is the plugin well-formed at all?
 npm test          # adapter through the real shell, over HTTP
 npm run manifest  # the manifest the host will refuse or accept

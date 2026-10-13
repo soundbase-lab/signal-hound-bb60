@@ -5,7 +5,8 @@
   "version": "1.2.1",
   "license": "BUSL-1.1",
   "platforms": [
-    "darwin-arm64"
+    "darwin-arm64",
+    "win32-x64"
   ],
   "repository": "https://github.com/soundbase-lab/signal-hound-bb60-mac",
   "maintainers": [
@@ -69,7 +70,7 @@
       "id": "libraryPath",
       "type": "textinput",
       "label": "Signal Hound library",
-      "help": "Only if libbb_api.dylib is not in the standard location."
+      "help": "Only if Signal Hound's library (libbb_api.dylib on macOS, bb_api.dll on Windows) is not in the standard location."
     }
   ]
 }
