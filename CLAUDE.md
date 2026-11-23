@@ -92,8 +92,11 @@ Facts established against a real BB60C that are not obvious from the code:
   per point, because a mean across bins averages a narrow carrier away.
 - **Listing devices is safe while one is sweeping**, which matters because
   discovery is polled every second for as long as a device is open.
-- **Only the BB60C is declared.** Add a BB60A or BB60D product to the manifest
-  and to `PRODUCT_BY_TYPE` once one has actually been swept.
+- **The BB60C is declared and proven; the BB60D is declared but unproven.**
+  The BB60D is offered with the BB60C's ranges so a user can try it. Nobody
+  has swept one with this plugin yet. Add a BB60A to the manifest and to
+  `PRODUCT_BY_TYPE` once one has actually been swept. A model left out is
+  logged once, not listed.
 
 Tests run against `driver/fake-worker.mjs` (`SB_BB60_MOCK=1`) on any platform,
 and against the native worker's synthetic device (`SB_BB60_MOCK=native`) where

@@ -97,7 +97,7 @@ check that Spike itself can see the analyzer, then close it.
 
 | | |
 |---|---|
-| Models | **BB60C**, tested on firmware 7. A BB60A or BB60D is not offered: neither has been run against this plugin. |
+| Models | **BB60C**, tested on firmware 7. **BB60D** is offered but untested: it uses the same library calls, with the BB60C's ranges. A BB60A is not offered, and the plugin log says so when one is attached. |
 | Range | 9 kHz – 6 GHz |
 | RBW | 1 kHz – 10 MHz. 1 kHz is the narrowest the Apple Silicon library sweeps, and Windows is held to the same. An RBW the analyzer refuses at that span is widened, and SoundBase shows what was used. |
 | Automatic RBW | 10 kHz |

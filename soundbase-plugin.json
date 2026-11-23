@@ -54,6 +54,28 @@
       "traits": {
         "isSpectrumAnalyzer": true
       }
+    },
+    {
+      "deviceTypeId": "plugin:signal-hound-bb60/bb60d",
+      "manufacturer": {
+        "id": "signal-hound",
+        "name": "Signal Hound"
+      },
+      "model": {
+        "id": "bb60d",
+        "name": "BB60D",
+        "displayName": "Signal Hound BB60D"
+      },
+      "family": {
+        "id": "signal-hound-bb60",
+        "name": "Signal Hound BB60"
+      },
+      "capabilities": {
+        "spectrumAnalyzer": true
+      },
+      "traits": {
+        "isSpectrumAnalyzer": true
+      }
     }
   ],
   "stateKeys": [],

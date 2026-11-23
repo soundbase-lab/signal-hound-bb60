@@ -12,12 +12,17 @@ import { Bb60Worker, listDevices } from './driver/bb60-driver.js';
 // ignores a device naming a product the manifest never declared.
 // `npm run rename` keeps the two in step; a test asserts they agree.
 export const PRODUCT = 'plugin:signal-hound-bb60/bb60c';
+export const PRODUCT_BB60D = 'plugin:signal-hound-bb60/bb60d';
 
 // The vendor library's device types (BB_DEVICE_*) → the product we announce.
-// Only the BB60C has been run against this plugin; a BB60A or BB60D is left
-// out of discovery rather than announced as something it has not been proven
-// to be.
-const PRODUCT_BY_TYPE = { 2: PRODUCT };
+// The BB60C has been swept against this plugin. The BB60D speaks the same
+// bb_api calls and is offered so it can be tried, but nobody has swept one
+// with this plugin yet: its ranges here are the BB60C's. A BB60A is left out
+// of discovery rather than announced as something it has not been proven to
+// be.
+const PRODUCT_BY_TYPE = { 2: PRODUCT, 3: PRODUCT_BB60D };
+/** Every product discovery can announce; each must be in the manifest. */
+export const PRODUCTS = [...new Set(Object.values(PRODUCT_BY_TYPE))];
 
 const MIN_FREQUENCY_HZ = 9_000;
 const MAX_FREQUENCY_HZ = 6_000_000_000;
@@ -125,6 +130,9 @@ export async function discoverDevices(pluginConfig) {
     listing = null;
   });
   const devices = await listing;
+  for (const d of devices) {
+    if (!PRODUCT_BY_TYPE[d.type]) noteSkipped(d);
+  }
   return devices
     .filter((d) => PRODUCT_BY_TYPE[d.type])
     .map((d) => ({
@@ -136,6 +144,17 @@ export async function discoverDevices(pluginConfig) {
       product: PRODUCT_BY_TYPE[d.type],
       transport: { kind: 'usb', serial: String(d.serial) },
     }));
+}
+
+// An analyzer left out of the list is otherwise invisible — no device, and
+// nothing in the log to say why. Say it once per analyzer, not every second.
+const skipped = new Set();
+function noteSkipped(d) {
+  if (skipped.has(d.serial)) return;
+  skipped.add(d.serial);
+  process.stderr.write(
+    `[warn] Found a Signal Hound ${d.model ?? `device of type ${d.type}`} (serial ${d.serial}), which this plugin does not support yet, so it is not listed.\n`
+  );
 }
 
 // ---------------------------------------------------------------------------
