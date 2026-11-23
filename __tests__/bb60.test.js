@@ -13,7 +13,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { HANDSHAKE_PREFIX } from '@soundbase/plugin-contract';
-import { PRODUCT, discoverDevices } from '../adapter.js';
+import {
+  PRODUCT,
+  PRODUCT_BB60D,
+  PRODUCTS,
+  discoverDevices,
+} from '../adapter.js';
 import { liveWorkers } from '../driver/bb60-driver.js';
 
 // the fake worker, not the native one: must be set before anything spawns
@@ -82,16 +87,19 @@ test('the manifest is valid and the handshake reports a real port', () => {
 // warning line in the plugin log. Catch it here instead.
 test('every product the adapter announces is declared in the manifest', () => {
   const declared = manifest.products.map((p) => p.deviceTypeId);
-  assert.ok(
-    declared.includes(PRODUCT),
-    `adapter.js announces ${PRODUCT}, but soundbase-plugin.json declares only ` +
-      `${declared.join(', ')}. Run \`npm run rename <id>\` to change both at once.`
-  );
-  assert.ok(
-    PRODUCT.startsWith(`plugin:${manifest.id}/`),
-    `a deviceTypeId is namespaced by the plugin id: expected ` +
-      `plugin:${manifest.id}/… but adapter.js announces ${PRODUCT}`
-  );
+  assert.ok(PRODUCTS.includes(PRODUCT));
+  for (const product of PRODUCTS) {
+    assert.ok(
+      declared.includes(product),
+      `adapter.js announces ${product}, but soundbase-plugin.json declares only ` +
+        `${declared.join(', ')}. Run \`npm run rename <id>\` to change both at once.`
+    );
+    assert.ok(
+      product.startsWith(`plugin:${manifest.id}/`),
+      `a deviceTypeId is namespaced by the plugin id: expected ` +
+        `plugin:${manifest.id}/… but adapter.js announces ${product}`
+    );
+  }
 });
 
 test('an attached analyzer is discovered under its serial number', async () => {
@@ -113,6 +121,43 @@ test('device ids are stable from one listing to the next', async () => {
     [DEVICE_ID]
   );
   assert.deepEqual(first, second);
+});
+
+// The vendor library lists every BB60 type. A BB60D is announced as its own
+// product, through the real shell; a model with no product is left out, and the
+// plugin log says so once, rather than the list being silently empty.
+test('a BB60D is discovered as its own product, and an unsupported model is logged and left out', async (t) => {
+  const BB60D_SERIAL = 60000003;
+  const BB60A_SERIAL = 60000002;
+  process.env.SB_BB60_FAKE_EXTRA_DEVICES = JSON.stringify([
+    { serial: BB60D_SERIAL, type: 3, model: 'BB60D' },
+    { serial: BB60A_SERIAL, type: 1, model: 'BB60A' },
+  ]);
+  const logged = [];
+  const write = process.stderr.write;
+  process.stderr.write = function (chunk, ...rest) {
+    logged.push(String(chunk));
+    return write.call(this, chunk, ...rest);
+  };
+  t.after(() => {
+    process.stderr.write = write;
+    delete process.env.SB_BB60_FAKE_EXTRA_DEVICES;
+  });
+
+  const bb60d = await waitForDevice(Boolean, `usb:${BB60D_SERIAL}`);
+  assert.ok(bb60d, 'the BB60D is listed by the shell');
+  assert.equal(bb60d.product, PRODUCT_BB60D);
+  assert.equal(
+    bb60d.product,
+    manifest.products.find((p) => p.model.id === 'bb60d')?.deviceTypeId
+  );
+  assert.equal(await findDevice(`usb:${BB60A_SERIAL}`), undefined);
+  assert.ok((await findDevice()).product === PRODUCT, 'the BB60C is unchanged');
+
+  await discoverDevices();
+  const skips = logged.filter((line) => line.includes(String(BB60A_SERIAL)));
+  assert.equal(skips.length, 1, 'logged once, not every listing');
+  assert.match(skips[0], /BB60A.*not support/);
 });
 
 test('no worker on this machine is an empty listing, not an error', async (t) => {

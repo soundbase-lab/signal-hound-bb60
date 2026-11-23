@@ -12,6 +12,16 @@ import { createInterface } from 'node:readline';
 
 const SERIAL = 60000001;
 const DEVICE = { serial: SERIAL, type: 2, model: 'BB60C' };
+// Tests only: more analyzers to list beside DEVICE, as JSON. They are listed,
+// never opened, so discovery's handling of other models can be tested.
+const EXTRA_DEVICES = (() => {
+  try {
+    return JSON.parse(process.env.SB_BB60_FAKE_EXTRA_DEVICES ?? '[]');
+  } catch {
+    return [];
+  }
+})();
+const LISTED = [DEVICE, ...EXTRA_DEVICES];
 const MIN_HZ = 9_000;
 const MAX_HZ = 6_400_000_000;
 const CARRIERS = [
@@ -25,7 +35,7 @@ const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 if (process.argv.includes('--list')) {
-  emit({ devices: [DEVICE] });
+  emit({ devices: LISTED });
   process.exit(0);
 }
 
@@ -78,7 +88,7 @@ function handle({ id, op, ...fields }) {
   const fail = (error) => emit({ id, ok: false, status: 0, error });
   switch (op) {
     case 'list':
-      return ok({ devices: [DEVICE] });
+      return ok({ devices: LISTED });
     case 'open':
       if (fields.serial && fields.serial !== SERIAL) {
         return fail('Device not found');
